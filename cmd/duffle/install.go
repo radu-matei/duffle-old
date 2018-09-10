@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"path"
+	"log"
+	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -15,6 +17,8 @@ import (
 	"github.com/deis/duffle/pkg/claim"
 	"github.com/deis/duffle/pkg/duffle/home"
 	"github.com/deis/duffle/pkg/loader"
+	"github.com/deis/duffle/pkg/repo"
+	"github.com/docker/distribution/reference"
 
 	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
@@ -27,7 +31,7 @@ This installs a CNAB bundle with a specific installation name. Once the install 
 this bundle can be referenced by installation name.
 
 Example:
-	$ duffle install my_release duffle/example:0.1.0
+	$ duffle install my_release bundles.f1sh.ca/duffle/example:0.1.0
 	$ duffle status my_release
 
 Different drivers are available for executing the duffle invocation image. The following drivers
@@ -42,11 +46,11 @@ Some drivers have additional configuration that can be passed via environment va
 	  - VERBOSE: "true" turns on extra output
 
 UNIX Example:
-	$ VERBOSE=true duffle install -d docker my_release duffle/example:0.1.0
+	$ VERBOSE=true duffle install -d docker my_release https://bundles.f1sh.ca/duffle/example:0.1.0
 
 Windows Example:
 	$ $env:VERBOSE = true
-	$ duffle install -d docker my_release duffle/example:0.1.0
+	$ duffle install -d docker my_release https://bundles.f1sh.ca/duffle/example:0.1.0
 
 For unpublished CNAB bundles, you can also load the bundle.json directly:
 
@@ -141,11 +145,7 @@ func bundleFileOrArg2(args []string, bundleFile string, w io.Writer) (string, er
 	case len(args) < 2 && bundleFile == "":
 		return "", errors.New("required arguments are NAME (name of the installation) and BUNDLE (CNAB bundle name) or file")
 	case len(args) == 2:
-		var err error
-		bundleFile, err = findBundleJSON(args[1], w)
-		if err != nil {
-			return "", err
-		}
+		return getBundleFile(args[1])
 	}
 	return bundleFile, nil
 }
@@ -189,54 +189,95 @@ func parseValues(file string) (map[string]interface{}, error) {
 	}
 }
 
-func getBundleFile(bundleName string) (string, string, error) {
+func getBundleFile(bundleName string) (string, error) {
 	var (
-		name string
-		repo string
+		name  string
+		ref   reference.NamedTagged
+		proto string
+		// repo  string
+		// tag   string
 	)
 	home := home.Home(homePath())
-	bundleInfo := strings.Split(bundleName, "/")
-	if len(bundleInfo) == 1 {
-		name = bundleInfo[0]
-		repo = home.DefaultRepository()
+
+	parts := strings.SplitN(bundleName, "://", 2)
+	if len(parts) == 2 {
+		proto = parts[0]
+		name = parts[1]
 	} else {
-		name = bundleInfo[len(bundleInfo)-1]
-		repo = path.Dir(bundleName)
+		proto = "https"
+		name = parts[0]
 	}
-	if strings.Contains(name, "./\\") {
-		return "", "", fmt.Errorf("bundle name '%s' is invalid. Bundle names cannot include the following characters: './\\'", name)
+	normalizedRef, err := reference.ParseNormalizedNamed(name)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse image name: %s: %v", name, err)
 	}
-
-	return filepath.Join(home.Repositories(), repo, "bundles", fmt.Sprintf("%s.json", name)), repo, nil
-}
-
-// findBundleJSON tries to find the JS file by search the repo index
-func findBundleJSON(bundleName string, w io.Writer) (string, error) {
-	relevantBundles := search([]string{bundleName})
-	switch len(relevantBundles) {
-	case 0:
-		return bundleName, fmt.Errorf("no bundles with the name '%s' was found", bundleName)
-	case 1:
-		bundleName = relevantBundles[0]
-	default:
-		var match bool
-		// check if we have an exact match
-		for _, f := range relevantBundles {
-			if strings.Compare(f, bundleName) == 0 {
-				bundleName = f
-				match = true
-			}
+	if reference.IsNameOnly(normalizedRef) {
+		ref, err = reference.WithTag(normalizedRef, "latest")
+		if err != nil {
+			// Default tag must be valid, to create a NamedTagged
+			// type with non-validated input the WithTag function
+			// should be used instead
+			panic(err)
 		}
-		if !match {
-			return bundleName, fmt.Errorf("%d bundles with the name '%s' were found: %v", len(relevantBundles), bundleName, relevantBundles)
+	} else {
+		if taggedRef, ok := normalizedRef.(reference.NamedTagged); ok {
+			ref = taggedRef
+		} else {
+			return "", fmt.Errorf("unsupported image name: %s", normalizedRef.String())
 		}
 	}
-	filePath, repo, err := getBundleFile(bundleName)
+
+	// ok, now that we have the name, tag and proto, let's fetch it!
+	domain := reference.Domain(ref)
+	if domain == "" {
+		domain = home.DefaultRepository()
+	}
+
+	url := fmt.Sprintf("%s://%s/repositories/%s/tags/%s", proto, domain, reference.Path(ref), ref.Tag())
+	resp, err := http.Get(url)
 	if err != nil {
 		return "", err
 	}
-	fmt.Fprintf(w, "loaded %s from repository %s\n", filePath, repo)
-	return filePath, nil
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("request to %s responded with a non-200 status code: %d", url, resp.StatusCode)
+	}
+
+	var entry *repo.BundleEntry
+	if err := json.NewDecoder(resp.Body).Decode(&entry); err != nil {
+		return "", err
+	}
+
+	for _, url := range entry.URLs {
+		resp, err := http.Get(url)
+		if err != nil {
+			return "", err
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			log.Printf("request to %s responded with a non-200 status code: %d", url, resp.StatusCode)
+			continue
+		}
+		bundle, err := bundle.ParseReader(resp.Body)
+		if err != nil {
+			return "", err
+		}
+		bundleFilepath := filepath.Join(home.Cache(), fmt.Sprintf("%s-%s.json", bundle.Name, bundle.Version))
+		if err := bundle.WriteFile(bundleFilepath, 0644); err != nil {
+			return "", err
+		}
+
+		return bundleFilepath, nil
+	}
+	return "", fmt.Errorf("unable to fetch %s %s: no requests to the following URLs succeeded: %v", entry.Name, entry.Version, entry.URLs)
+}
+
+func isBundle(filePath string, f os.FileInfo) bool {
+	return !f.IsDir() &&
+		strings.HasSuffix(f.Name(), ".json") &&
+		filepath.Base(filepath.Dir(filePath)) == "bundles"
 }
 
 func loadBundle(bundleFile string) (bundle.Bundle, error) {

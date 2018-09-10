@@ -17,7 +17,7 @@ func TestDuffleHome(t *testing.T) {
 	}
 
 	isEq(t, ph.String(), "/r")
-	isEq(t, ph.Repositories(), "/r/repositories")
+	isEq(t, ph.Cache(), "/r/cache")
 	isEq(t, ph.Plugins(), "/r/plugins")
 	isEq(t, ph.Claims(), "/r/claims")
 	isEq(t, ph.Credentials(), "/r/credentials")

@@ -18,10 +18,7 @@ func newRepoCmd(w io.Writer) *cobra.Command {
 		Long:  repoDesc,
 	}
 	cmd.AddCommand(
-		newRepoAddCmd(w),
-		newRepoListCmd(w),
-		newRepoRemoveCmd(w),
-		newRepoUpdateCmd(w),
+		newRepoGenerateCmd(w),
 	)
 	return cmd
 }

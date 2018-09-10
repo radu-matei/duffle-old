@@ -2,6 +2,9 @@ package bundle
 
 import (
 	"encoding/json"
+	"io"
+	"io/ioutil"
+	"os"
 )
 
 // ParseBuffer reads CNAB metadata out of a JSON byte stream
@@ -14,6 +17,21 @@ func ParseBuffer(data []byte) (Bundle, error) {
 // Parse reads CNAB metadata from a JSON string
 func Parse(text string) (Bundle, error) {
 	return ParseBuffer([]byte(text))
+}
+
+// Parse reads CNAB metadata from a JSON string
+func ParseReader(r io.Reader) (Bundle, error) {
+	b := Bundle{}
+	err := json.NewDecoder(r).Decode(&b)
+	return b, err
+}
+
+func (b Bundle) WriteFile(dest string, mode os.FileMode) error {
+	d, err := json.Marshal(b)
+	if err != nil {
+		return err
+	}
+	return ioutil.WriteFile(dest, d, mode)
 }
 
 // LocationRef specifies a location within the invocation package
