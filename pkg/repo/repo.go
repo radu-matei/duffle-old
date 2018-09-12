@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/deis/duffle/pkg/loader"
@@ -35,21 +36,21 @@ type BundleEntry struct {
 	// The version of the bundle.
 	Version string `json:"version"`
 	// The URL to a relevant project page, git repo, or contact person.
-	Home string `json:"home,omitempty"`
+	Home string `json:"home"`
 	// URLs is a mirror list of URLs to the source code of this bundle.
-	URLs []string `json:"urls,omitempty"`
+	URLs []string `json:"urls"`
 	// A one-sentence description of the bundle.
-	Description string `json:"description,omitempty"`
+	Description string `json:"description"`
 	// A list of string keywords used for searching.
-	Keywords []string `json:"keywords,omitempty"`
+	Keywords []string `json:"keywords"`
 	// A list of name and URL/email address combinations for the maintainer(s).
-	Maintainers []*Maintainer `json:"maintainers,omitempty"`
+	Maintainers []*Maintainer `json:"maintainers"`
 	// The API Version of this bundle.
-	APIVersion string `json:"apiVersion,omitempty"`
+	APIVersion string `json:"apiVersion"`
 	// The shasum digest of the bundle.
-	Digest string `json:"digest,omitempty"`
+	Digest string `json:"digest"`
 	// The time this entry was added to the index.
-	Added time.Time `json:"created,omitempty"`
+	Added time.Time `json:"created"`
 }
 
 // GenerateFromDirectory reads a (flat) directory and generates a repository.
@@ -66,7 +67,14 @@ func GenerateFromDirectory(dir, baseURL string) error {
 	}
 	bundles = append(bundles, moreBundles...)
 
+	index := NewIndexFile()
+
 	for _, bundleFile := range bundles {
+		// skip the index
+		if strings.HasSuffix(bundleFile, "index.json") {
+			continue
+		}
+
 		l, err := loader.New(bundleFile)
 		if err != nil {
 			return err
@@ -76,7 +84,7 @@ func GenerateFromDirectory(dir, baseURL string) error {
 			return err
 		}
 
-		entry := BundleEntry{
+		entry := &BundleEntry{
 			Name:       b.Name,
 			Version:    b.Version,
 			APIVersion: APIVersionV1,
@@ -113,6 +121,8 @@ func GenerateFromDirectory(dir, baseURL string) error {
 		entry.Digest = hash
 		entry.Added = time.Now()
 
+		index.Add(entry)
+
 		data, err := json.Marshal(entry)
 		if err != nil {
 			return err
@@ -124,6 +134,10 @@ func GenerateFromDirectory(dir, baseURL string) error {
 		if err := ioutil.WriteFile(filepath.Join(tagDir, entry.Version), data, 0644); err != nil {
 			return err
 		}
+	}
+	index.SortEntries()
+	if err := index.WriteFile(filepath.Join(dir, IndexPath), 0644); err != nil {
+		return err
 	}
 	return nil
 }

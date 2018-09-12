@@ -17,9 +17,10 @@ func TestGenerateFromDirectory(t *testing.T) {
 	if err := GenerateFromDirectory(dir, "http://localhost:8080"); err != nil {
 		t.Error(err)
 	}
-	if err := os.RemoveAll(filepath.Join(dir, "repositories")); err != nil {
-		t.Error(err)
-	}
+	defer func() {
+		os.RemoveAll(filepath.Join(dir, "repositories"))
+		os.Remove(filepath.Join(dir, IndexPath))
+	}()
 
 	// TODO: more pervasive tests.
 }
