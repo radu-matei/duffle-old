@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/radu-matei/go-autorest/autorest/adal"
+
 	"github.com/deis/duffle/pkg/action"
 	"github.com/deis/duffle/pkg/bundle"
 	"github.com/deis/duffle/pkg/claim"
@@ -234,10 +236,64 @@ func getBundleFile(bundleName string) (string, error) {
 	}
 
 	url := fmt.Sprintf("%s://%s/repositories/%s/tags/%s", proto, domain, reference.Path(ref), ref.Tag())
-	resp, err := http.Get(url)
+
+	// Authenticate to Azure AD
+	//
+	// This should be part of duffle login
+	//
+	// Ignore the very hacky nature of what is about to happen
+	// And please do not merge this as is
+
+	clientID := getEnvVarOrExit("CLIENT_ID")
+	tenantID := getEnvVarOrExit("TENANT_ID")
+	resource := getEnvVarOrExit("RESOURCE")
+
+	oauthClient := &http.Client{}
+	oauthConfig, err := adal.NewOAuthConfig("https://sts.windows.net", tenantID)
 	if err != nil {
-		return "", err
+		log.Fatalf("cannot get oauth config: %v", err)
 	}
+
+	// Acquire the device code
+	deviceCode, err := adal.InitiateDeviceAuth(
+		oauthClient,
+		*oauthConfig,
+		clientID,
+		resource)
+	if err != nil {
+		log.Fatalf("Failed to start device auth flow: %s", err)
+	}
+
+	// Display the authentication message
+	fmt.Println(*deviceCode.Message)
+
+	// Wait here until the user is authenticated
+	token, err := adal.WaitForUserCompletion(oauthClient, deviceCode)
+	if err != nil {
+		log.Fatalf("Failed to finish device auth flow: %s", err)
+	}
+
+	spt, err := adal.NewServicePrincipalTokenFromManualToken(
+		*oauthConfig,
+		clientID,
+		resource,
+		*token,
+		nil)
+	if err != nil {
+		log.Fatalf("cannot get token: %v", err)
+	}
+
+	var bearer = "Bearer " + spt.OAuthToken()
+	req, err := http.NewRequest("GET", url, nil)
+	req.Header.Add("Authorization", bearer)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Fatalf("error on HTTP request: %v", err)
+	}
+
+	// End of hacky portion
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
@@ -250,9 +306,13 @@ func getBundleFile(bundleName string) (string, error) {
 	}
 
 	for _, url := range entry.URLs {
-		resp, err := http.Get(url)
+		req, err := http.NewRequest("GET", url, nil)
+		req.Header.Add("Authorization", bearer)
+
+		client := &http.Client{}
+		resp, err := client.Do(req)
 		if err != nil {
-			return "", err
+			log.Fatalf("error on HTTP request: %v", err)
 		}
 		defer resp.Body.Close()
 
@@ -287,4 +347,13 @@ func loadBundle(bundleFile string) (bundle.Bundle, error) {
 	}
 
 	return l.Load()
+}
+
+func getEnvVarOrExit(varName string) string {
+	value := os.Getenv(varName)
+	if value == "" {
+		log.Fatalf("missing environment variable %s\n", varName)
+	}
+
+	return value
 }
