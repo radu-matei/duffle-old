@@ -132,10 +132,10 @@ func (i Index) GetVersions(name string) (map[string]string, bool) {
 	return ret, ok
 }
 
-// WriteFile writes an index file to the given destination path.
+// WriteIndex writes an index file to the given destination path.
 //
 // The mode on the file is set to 'mode'.
-func (i Index) WriteFile(dest string, mode os.FileMode) error {
+func (i Index) WriteIndex(dest string, mode os.FileMode) error {
 	b, err := json.MarshalIndent(i, "", "    ")
 	if err != nil {
 		return err

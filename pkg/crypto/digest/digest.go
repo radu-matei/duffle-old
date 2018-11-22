@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+
+	"github.com/deis/duffle/pkg/bundle"
 )
 
 // OfReader reads in a stream and spits out a truncated checksum with output similar to `shasum -a 256 build.tar.gz | awk '{print $1}'`.
@@ -34,4 +36,9 @@ func OfBuffer(b []byte) (string, error) {
 	fulltag := h.Sum(nil)
 	tag := fmt.Sprintf("%.20x", fulltag)
 	return tag, nil
+}
+
+// OfBundle returns the
+func OfBundle(bf *bundle.Bundle) (string, error) {
+	return OfBuffer([]byte(fmt.Sprintf("%v", bf)))
 }

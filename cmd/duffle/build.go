@@ -232,7 +232,7 @@ func recordBundleReference(home home.Home, name, version, digest string) error {
 
 	index.Add(name, version, digest)
 
-	if err := index.WriteFile(home.Repositories(), 0644); err != nil {
+	if err := index.WriteIndex(home.Repositories(), 0644); err != nil {
 		return fmt.Errorf("could not write to %s: %v", home.Repositories(), err)
 	}
 

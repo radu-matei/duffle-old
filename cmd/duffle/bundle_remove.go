@@ -73,7 +73,7 @@ func newBundleRemoveCmd(w io.Writer) *cobra.Command {
 				if len(deletions) == 0 {
 					return nil
 				}
-				if err := index.WriteFile(h.Repositories(), 0644); err != nil {
+				if err := index.WriteIndex(h.Repositories(), 0644); err != nil {
 					return err
 				}
 				deleteBundleVersions(deletions, index, h, w)
@@ -85,7 +85,7 @@ func newBundleRemoveCmd(w io.Writer) *cobra.Command {
 				fmt.Fprintf(w, "Bundle %q not found. Nothing deleted.", bname)
 				return nil
 			}
-			if err := index.WriteFile(h.Repositories(), 0644); err != nil {
+			if err := index.WriteIndex(h.Repositories(), 0644); err != nil {
 				return err
 			}
 
