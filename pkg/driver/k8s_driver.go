@@ -3,14 +3,20 @@ package driver
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"io/ioutil"
+	"net/url"
+	"os"
 	"strings"
 	"time"
 
 	"k8s.io/api/core/v1"
 	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/tools/remotecommand"
 	// Side-effect import
 	//_ "k8s.io/client-go/plugin/pkg/client/auth"
 )
@@ -225,7 +231,19 @@ func (d *Kubernetes) runPodAndWait(name string, op *Operation) error {
 	}
 
 	// Waid for the pod to run to completion.
-	return d.waitForPod(name, op)
+	err := d.waitForPod(name, op)
+	if err != nil {
+		return fmt.Errorf("cannot wait for pod: %v", err)
+	}
+
+	attachOptions := &v1.PodAttachOptions{
+		Stdin:  false,
+		Stdout: true,
+		Stderr: true,
+		TTY:    false,
+	}
+
+	return d.attach(name, attachOptions, ioutil.NopCloser(nil), os.Stdout, os.Stderr)
 }
 
 func (d *Kubernetes) destroySecret(name string) error {
@@ -300,4 +318,68 @@ func (d *Kubernetes) waitForPod(name string, op *Operation) error {
 			return fmt.Errorf("timeout waiting for pod %s to start", name)
 		}
 	}
+}
+
+// attach attaches to a given pod, outputting to stdout and stderr
+func (d *Kubernetes) attach(name string, attachOptions *v1.PodAttachOptions, stdin io.Reader, stdout, stderr io.Writer) error {
+
+	pod, err := d.Client.CoreV1().Pods(d.Namespace).Get(name, meta.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("cannot get pod to attach: %v", err)
+	}
+
+	container, err := containerToAttachTo("", pod)
+	if err != nil {
+		return fmt.Errorf("cannot get container to attach to: %v", err)
+	}
+
+	req := d.Client.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(pod.Name).
+		Namespace(pod.Namespace).
+		SubResource("attach")
+
+	attachOptions.Container = container.Name
+	req.VersionedParams(attachOptions, scheme.ParameterCodec)
+
+	streamOptions := remotecommand.StreamOptions{
+		Stdin:  ioutil.NopCloser(nil),
+		Stdout: stdout,
+		Stderr: stderr,
+	}
+
+	return d.startStream("POST", req.URL(), streamOptions)
+}
+
+func (d *Kubernetes) startStream(method string, url *url.URL, streamOptions remotecommand.StreamOptions) error {
+	config, err := d.getKubeConfig()
+	if err != nil {
+		return fmt.Errorf("cannot get Kubernetes config: %v", err)
+	}
+
+	exec, err := remotecommand.NewSPDYExecutor(config, method, url)
+	if err != nil {
+		return err
+	}
+
+	return exec.Stream(streamOptions)
+}
+
+// containerToAttach returns a reference to the container to attach to, given
+// by name or the first container if name is empty.
+func containerToAttachTo(container string, pod *v1.Pod) (*v1.Container, error) {
+	if len(container) > 0 {
+		for i := range pod.Spec.Containers {
+			if pod.Spec.Containers[i].Name == container {
+				return &pod.Spec.Containers[i], nil
+			}
+		}
+		for i := range pod.Spec.InitContainers {
+			if pod.Spec.InitContainers[i].Name == container {
+				return &pod.Spec.InitContainers[i], nil
+			}
+		}
+		return nil, fmt.Errorf("container not found (%s)", container)
+	}
+	return &pod.Spec.Containers[0], nil
 }
